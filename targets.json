@@ -1,0 +1,22 @@
+[
+  {
+    "id": "example-home",
+    "name": "Example Home Page",
+    "url": "https://example.test/",
+    "method": "GET",
+    "payload": null,
+    "headers": {
+      "Accept": "text/html,application/xhtml+xml"
+    }
+  },
+  {
+    "id": "example-login",
+    "name": "Example Login Page",
+    "url": "https://example.test/login",
+    "method": "GET",
+    "payload": null,
+    "headers": {
+      "Accept": "text/html,application/xhtml+xml"
+    }
+  }
+]
