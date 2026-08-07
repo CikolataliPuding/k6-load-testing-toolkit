@@ -1,0 +1,10 @@
+# Hedef bilgileri (kullanıcı adı/şifre içerir, repo'ya girmemeli)
+targets.json
+
+# Test çıktıları (rapor ve loglar, repo şişirmesin diye izlenmiyor)
+*.html
+*_terminal_log.txt
+
+# Node/sistem
+node_modules/
+.DS_Store
