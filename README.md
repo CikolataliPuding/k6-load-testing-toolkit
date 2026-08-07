@@ -81,8 +81,8 @@ For targets that require authentication, the `loginUrl` and `credentials` fields
 ```
 
 * **Order — Load → Spike → Soak → Stress:** least destructive first, most destructive last. Soak deliberately runs before Stress so the leak/degradation check happens against a clean, unbroken system rather than one already weakened by the stress test. (`scalability` is not part of this automation and is still run manually.)
-* A fixed **4-minute (240s) cooldown** is inserted between each test.
-* Each test's terminal output is captured to its own log file: `${TARGET_APP}_${TEST_TYPE}_terminal_log.txt`.
+* A fixed **4-minute (240s) cooldown** is inserted between each test, with a countdown printed to the terminal every 30s so it's clear the script is still running.
+* Results are organized per test into their own folder: `<TARGET_APP>/<TARGET_APP>_<TEST_TYPE>/`, e.g. `deneme/deneme_load/`, `deneme/deneme_spike/`. Each folder contains that test's terminal log (`..._terminal_log.txt`) and HTML report (`..._report.html`).
 * Start/end timestamps are printed for every test and cooldown.
 * The k6 binary path is configurable via the `K6_BIN` variable at the top of the script.
 * If a test fails (non-zero k6 exit code), the failure is logged and the script **continues** with the remaining tests rather than aborting the whole run. A summary of failures and all generated HTML reports is printed at the end.

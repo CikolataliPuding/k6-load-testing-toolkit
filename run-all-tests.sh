@@ -71,14 +71,29 @@ echo "==========================================================="
 
 TOTAL=${#TEST_ORDER[@]}
 
+# ---- Per-run output folder ----
+# Everything for this TARGET_APP goes under RUN_DIR/, one subfolder per
+# test type, e.g. deneme/deneme_load/, deneme/deneme_spike/, ...
+RUN_DIR="${TARGET_APP}"
+mkdir -p "$RUN_DIR"
+echo "Output folder: ${RUN_DIR}/"
+echo "==========================================================="
+
 for i in "${!TEST_ORDER[@]}"; do
   TEST_TYPE="${TEST_ORDER[$i]}"
-  LOG_FILE="${TARGET_APP}_${TEST_TYPE}_terminal_log.txt"
-  REPORT_FILE="${TARGET_APP}_${TEST_TYPE}_report.html"
+  TEST_DIR="${RUN_DIR}/${TARGET_APP}_${TEST_TYPE}"
+  mkdir -p "$TEST_DIR"
+
+  LOG_FILE="${TEST_DIR}/${TARGET_APP}_${TEST_TYPE}_terminal_log.txt"
+  # master-test.js writes the report to the current directory using this
+  # fixed name; we move it into TEST_DIR once the run finishes.
+  RAW_REPORT_FILE="${TARGET_APP}_${TEST_TYPE}_report.html"
+  REPORT_FILE="${TEST_DIR}/${TARGET_APP}_${TEST_TYPE}_report.html"
 
   echo ""
   echo "-----------------------------------------------------------"
   echo "[$(timestamp)] START ($((i + 1))/${TOTAL}): TEST_TYPE=${TEST_TYPE} TARGET_APP=${TARGET_APP}"
+  echo "Output folder: ${TEST_DIR}/"
   echo "Logging to: ${LOG_FILE}"
   echo "-----------------------------------------------------------"
 
@@ -97,7 +112,8 @@ for i in "${!TEST_ORDER[@]}"; do
     echo "[$(timestamp)] OK: ${TEST_TYPE} completed successfully."
   fi
 
-  if [[ -f "$REPORT_FILE" ]]; then
+  if [[ -f "$RAW_REPORT_FILE" ]]; then
+    mv -f "$RAW_REPORT_FILE" "$REPORT_FILE"
     REPORT_FILES+=("$REPORT_FILE")
   fi
 
