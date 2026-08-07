@@ -17,41 +17,75 @@ if (!targetApp) {
 }
 
 // ---- 5 TEST PROFILES (all defined) ----
+// NOTE: load/spike/soak/stress durations below have been SHORTENED for
+// internship/demo purposes. Run order for the demo automation is
+// Load -> Spike -> Soak -> Stress (least destructive -> most destructive;
+// Soak intentionally runs before Stress so the leak/degradation check
+// happens against a clean, unbroken system). See docs/test-durations.md.
 const scenarioProfiles = {
   load: {
+    // PRODUCTION RECOMMENDATION (original/full-scale):
+    // stages: [
+    //   { duration: '1m', target: 150 },
+    //   { duration: '2m', target: 150 },   // steady-state: at least 20-60min recommended
+    //   { duration: '1m', target: 0 },
+    // ],
     executor: 'ramping-vus', startVUs: 0,
     stages: [
-      { duration: '1m', target: 150 },
-      { duration: '2m', target: 150 },
-      { duration: '1m', target: 0 },
-    ],
-  },
-  stress: {
-    executor: 'ramping-vus', startVUs: 0,
-    stages: [
-      { duration: '2m', target: 100 },
-      { duration: '2m', target: 200 },
-      { duration: '2m', target: 400 },
-      { duration: '2m', target: 600 },
-      { duration: '2m', target: 0 },
-    ],
-  },
-  soak: {
-    executor: 'constant-vus',
-    vus: 30,
-    duration: '30m',   // Increase it to 2–8 hours for a true soak test.
-  },
-  spike: {
-    executor: 'ramping-vus', startVUs: 0,
-    stages: [
-      { duration: '30s', target: 40 },
-      { duration: '20s', target: 500 },   // sudden rise
-      { duration: '1m',  target: 500 },
-      { duration: '20s', target: 40 },    // sudden drop
-      { duration: '1m',  target: 20 },    // recovery
+      { duration: '30s', target: 150 },
+      { duration: '1m',  target: 150 },
       { duration: '30s', target: 0 },
     ],
   },
+  spike: {
+    // PRODUCTION RECOMMENDATION (original/full-scale):
+    // stages: [
+    //   { duration: '30s', target: 40 },
+    //   { duration: '20s', target: 500 },   // sudden rise
+    //   { duration: '1m',  target: 500 },
+    //   { duration: '20s', target: 40 },    // sudden drop
+    //   { duration: '1m',  target: 20 },    // recovery
+    //   { duration: '30s', target: 0 },
+    // ],
+    executor: 'ramping-vus', startVUs: 0,
+    stages: [
+      { duration: '20s', target: 40 },
+      { duration: '15s', target: 500 },   // sudden rise
+      { duration: '40s', target: 500 },
+      { duration: '15s', target: 40 },    // sudden drop
+      { duration: '30s', target: 20 },    // recovery
+      { duration: '20s', target: 0 },
+    ],
+  },
+  soak: {
+    // PRODUCTION RECOMMENDATION (original/full-scale):
+    // executor: 'constant-vus',
+    // vus: 30,
+    // duration: '30m',   // increase to 2-8 hours, or even days, for a true soak test.
+    executor: 'constant-vus',
+    vus: 30,
+    duration: '12m',
+  },
+  stress: {
+    // PRODUCTION RECOMMENDATION (original/full-scale):
+    // stages: [
+    //   { duration: '2m', target: 100 },
+    //   { duration: '2m', target: 200 },
+    //   { duration: '2m', target: 400 },
+    //   { duration: '2m', target: 600 },
+    //   { duration: '2m', target: 0 },
+    // ],
+    executor: 'ramping-vus', startVUs: 0,
+    stages: [
+      { duration: '1m', target: 100 },
+      { duration: '1m', target: 200 },
+      { duration: '1m', target: 400 },
+      { duration: '1m', target: 600 },
+      { duration: '1m', target: 0 },
+    ],
+  },
+  // scalability: not part of the automated run-all-tests.sh sequence,
+  // still executed manually (untouched/full-scale).
   scalability: {
     executor: 'ramping-vus', startVUs: 0,
     stages: [

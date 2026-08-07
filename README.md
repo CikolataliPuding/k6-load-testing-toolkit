@@ -21,6 +21,9 @@ For this project, k6 was preferred over alternatives such as JMeter and Gatling 
 
 ```bash
 # Install k6 on Debian, Ubuntu, or Kali Linux
+curl -fsSL https://dl.k6.io/key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/k6-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+sudo apt-get update
 sudo apt-get install k6
 
 # Alternatively, refer to the official documentation:
@@ -67,6 +70,34 @@ sudo apt-get install k6
 ```
 
 For targets that require authentication, the `loginUrl` and `credentials` fields can be added. The `setup()` function automatically uses these fields during authentication.
+
+## Demo Automation: `run-all-tests.sh`
+
+`run-all-tests.sh` runs Load, Spike, Soak, and Stress sequentially (not in parallel) against a single `TARGET_APP`, in that specific order:
+
+```bash
+./run-all-tests.sh <TARGET_APP>
+./run-all-tests.sh kurum-do-login
+```
+
+* **Order — Load → Spike → Soak → Stress:** least destructive first, most destructive last. Soak deliberately runs before Stress so the leak/degradation check happens against a clean, unbroken system rather than one already weakened by the stress test. (`scalability` is not part of this automation and is still run manually.)
+* A fixed **4-minute (240s) cooldown** is inserted between each test.
+* Each test's terminal output is captured to its own log file: `${TARGET_APP}_${TEST_TYPE}_terminal_log.txt`.
+* Start/end timestamps are printed for every test and cooldown.
+* The k6 binary path is configurable via the `K6_BIN` variable at the top of the script.
+* If a test fails (non-zero k6 exit code), the failure is logged and the script **continues** with the remaining tests rather than aborting the whole run. A summary of failures and all generated HTML reports is printed at the end.
+
+## A Note on Test Durations
+
+The test durations in this repo (Load ~2min, Spike ~2-3min, Soak ~10-15min, Stress ~5-8min) have been SHORTENED to fit an internship/demo context. The original recommended values are kept as comments in the code (`master-test.js`).
+
+Industry-standard recommendations for a real/production environment:
+
+* Load Test steady-state: at least 20-60 minutes
+* Soak Test: several hours to several days
+* Stress Test: a few minutes of stabilization after each load increase
+
+A FIXED 4-minute cooldown is used between tests. Note: a more advanced approach would be an adaptive health-check mechanism that measures whether the system has actually returned to baseline instead of using a fixed delay (logging the recovery time itself as a metric) — this repo currently uses a simple/fixed duration, noted here as an area for future improvement.
 
 ## Alternative Structure: `lib/` Directory
 
