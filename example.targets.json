@@ -4,7 +4,7 @@
     "name": "Example Home Page",
     "url": "https://example.test/",
     "method": "GET",
-    "payload": null,
+    "payload": "username=REPLACE_ME&password=REPLACE_ME",
     "headers": {
       "Accept": "text/html,application/xhtml+xml"
     }
@@ -14,7 +14,7 @@
     "name": "Example Login Page",
     "url": "https://example.test/login",
     "method": "GET",
-    "payload": null,
+    "payload": "username=REPLACE_ME&password=REPLACE_ME",
     "headers": {
       "Accept": "text/html,application/xhtml+xml"
     }
