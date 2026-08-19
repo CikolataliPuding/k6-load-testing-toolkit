@@ -4,7 +4,10 @@ targets.json
 # Test çıktıları (rapor ve loglar, repo şişirmesin diye izlenmiyor)
 *.html
 *_terminal_log.txt
+*_summary.json
+recovery_times.log
 
 # Node/sistem
 node_modules/
 .DS_Store
+__pycache__/

@@ -38,7 +38,7 @@ const scenarioProfiles = {
     ],
   },
   spike: {
-    // PRODUCTION RECOMMENDATION (original/full-scale):
+    // PRODUCTION RECOMMENDATION (original/full-scale, still closed-model):
     // stages: [
     //   { duration: '30s', target: 40 },
     //   { duration: '20s', target: 500 },   // sudden rise
@@ -47,7 +47,41 @@ const scenarioProfiles = {
     //   { duration: '1m',  target: 20 },    // recovery
     //   { duration: '30s', target: 0 },
     // ],
-    executor: 'ramping-vus', startVUs: 0,
+    //
+    // OPEN MODEL SWITCH (Little's Law rationale): this used to be
+    // `ramping-vus` (a CLOSED model) — kept below for reference:
+    //
+    //   executor: 'ramping-vus', startVUs: 0,
+    //   stages: [
+    //     { duration: '20s', target: 40 },
+    //     { duration: '15s', target: 500 },   // sudden rise
+    //     { duration: '40s', target: 500 },
+    //     { duration: '15s', target: 40 },    // sudden drop
+    //     { duration: '30s', target: 20 },    // recovery
+    //     { duration: '20s', target: 0 },
+    //   ],
+    //
+    // In a closed model, a fixed pool of VUs each wait for their previous
+    // request to finish before starting the next one. By Little's Law
+    // (L = lambda * W), if the server slows down (W grows) the arrival
+    // rate (lambda) is automatically throttled down too, since a limited
+    // number of VUs can't fire more requests than their response time
+    // allows. That self-throttling UNDERSTATES how severe a real
+    // flash-crowd is: real users don't politely wait their turn to start
+    // a new request — new arrivals keep piling on regardless of how slow
+    // the server has become.
+    //
+    // `ramping-arrival-rate` is an OPEN model: it targets a planned
+    // number of new iterations started per second, independent of how
+    // long each iteration/request takes. If the server slows down, k6
+    // spins up more VUs (up to maxVUs) to keep hitting the target arrival
+    // rate, which is what actually happens during a real sudden traffic
+    // spike.
+    executor: 'ramping-arrival-rate',
+    startRate: 40,          // iterations/sec at t=0, mirrors the old startVUs=40 warm-up level
+    timeUnit: '1s',
+    preAllocatedVUs: 500,   // pre-allocated worker pool, sized for the 500/s peak
+    maxVUs: 700,            // headroom above preAllocatedVUs in case iterations run slower than 1s
     stages: [
       { duration: '20s', target: 40 },
       { duration: '15s', target: 500 },   // sudden rise
@@ -67,7 +101,7 @@ const scenarioProfiles = {
     duration: '12m',
   },
   stress: {
-    // PRODUCTION RECOMMENDATION (original/full-scale):
+    // PRODUCTION RECOMMENDATION (original/full-scale, manually-guessed VU steps):
     // stages: [
     //   { duration: '2m', target: 100 },
     //   { duration: '2m', target: 200 },
@@ -75,13 +109,36 @@ const scenarioProfiles = {
     //   { duration: '2m', target: 600 },
     //   { duration: '2m', target: 0 },
     // ],
-    executor: 'ramping-vus', startVUs: 0,
+    //
+    // Previous demo-shortened version — kept for reference:
+    //   executor: 'ramping-vus', startVUs: 0,
+    //   stages: [
+    //     { duration: '1m', target: 100 },
+    //     { duration: '1m', target: 200 },
+    //     { duration: '1m', target: 400 },
+    //     { duration: '1m', target: 600 },
+    //     { duration: '1m', target: 0 },
+    //   ],
+    //
+    // BREAKPOINT EXECUTOR: switched from hand-picked fixed VU steps to
+    // k6's official breakpoint-testing pattern (see k6 docs "Breakpoint
+    // testing"): an open-model `ramping-arrival-rate` that just keeps
+    // ramping the request rate up, combined with an `abortOnFail`
+    // threshold on http_req_failed below. Instead of us guessing which
+    // VU count breaks the system, k6 keeps raising load on its own and
+    // the test stops ITSELF the moment the real error-rate threshold is
+    // crossed — that stopping point is the observed breaking point.
+    // See handleSummary() below for where this is reported.
+    executor: 'ramping-arrival-rate',
+    startRate: 50,           // iterations/sec at t=0
+    timeUnit: '1s',
+    preAllocatedVUs: 300,    // worker pool pre-allocated for the ramp
+    maxVUs: 1200,            // headroom so k6 can keep pushing rate even as responses slow down
     stages: [
-      { duration: '1m', target: 100 },
-      { duration: '1m', target: 200 },
-      { duration: '1m', target: 400 },
-      { duration: '1m', target: 600 },
-      { duration: '1m', target: 0 },
+      // Demo-shortened single ramp (~5-8min budget); a real breakpoint
+      // run typically ramps for 15min+ toward a much higher target so
+      // the breaking point isn't reached artificially early.
+      { duration: '6m', target: 1000 },
     ],
   },
   // scalability: not part of the automated run-all-tests.sh sequence,
@@ -103,8 +160,18 @@ if (!scenarioProfiles[testType]) {
 
 // ---- Test type-specific realistic thresholds ----
 const thresholdsByType = {
-  load:        { http_req_duration: ['p(95)<2000'], http_req_failed: ['rate<0.01'] },
-  stress:      { http_req_failed: ['rate<0.15'] },
+  load:  { http_req_duration: ['p(95)<2000'], http_req_failed: ['rate<0.01'] },
+  // Breakpoint executor: automatic breakage detection instead of manual
+  // guessing (see scenarioProfiles.stress above). `abortOnFail: true`
+  // makes k6 stop the whole test run as soon as the error rate crosses
+  // 10%, so the ramp doesn't keep grinding a broken system for no
+  // reason. `delayAbortEval` gives it a few seconds of samples first so
+  // a single early blip doesn't trigger a false abort.
+  stress: {
+    http_req_failed: [
+      { threshold: 'rate<0.10', abortOnFail: true, delayAbortEval: '10s' },
+    ],
+  },
   soak:        { http_req_duration: ['p(95)<2500'], http_req_failed: ['rate<0.02'] },
   spike:       { http_req_failed: ['rate<0.20'] },
   scalability: { http_req_duration: ['p(95)<2000'], http_req_failed: ['rate<0.02'] },
@@ -161,5 +228,21 @@ export default function (data) {
 export function handleSummary(data) {
   const filename = `${targetApp.id}_${testType}_report.html`;
   console.log(`Test finished! Report: ${filename}`);
+
+  // Breakpoint reporting (point 2): print where the stress/breakpoint
+  // run actually stopped, so the breaking point doesn't have to be
+  // eyeballed out of raw metrics. Purely additive console output — does
+  // not change what gets written to the HTML report below.
+  if (testType === 'stress') {
+    const reqRate = data.metrics.http_reqs && data.metrics.http_reqs.values.rate;
+    const errRate = data.metrics.http_req_failed && data.metrics.http_req_failed.values.rate;
+    const peakVUs = data.metrics.vus_max && data.metrics.vus_max.values.value;
+    console.log(
+      `BREAKPOINT: system started failing at ~${reqRate ? reqRate.toFixed(1) : 'N/A'} req/s ` +
+      `(~${peakVUs != null ? peakVUs : 'N/A'} VUs allocated), ` +
+      `error rate at stop: ${errRate != null ? (errRate * 100).toFixed(1) : 'N/A'}%`
+    );
+  }
+
   return { [filename]: htmlReport(data) };
 }
