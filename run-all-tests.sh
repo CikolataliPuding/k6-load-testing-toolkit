@@ -35,7 +35,7 @@ COOLDOWN_SECONDS=240         # Fallback FIXED cooldown, only used if adaptive
 # A slow recovery is itself a soft signal of a possible resource leak
 # from Soak, so we log every recovery time to recovery_times.log.
 ADAPTIVE_COOLDOWN_MAX_SECONDS=300       # 5 min safety cap so we never hang forever.
-ADAPTIVE_COOLDOWN_POLL_INTERVAL=10      # re-probe every 10s while waiting.
+ADAPTIVE_COOLDOWN_POLL_INTERVAL=12      # re-probe every 12s while waiting.
 ADAPTIVE_COOLDOWN_RECOVERY_MARGIN=1.2   # "recovered" = response time <= baseline * 1.2 (i.e. within 20%).
 
 TEST_ORDER=("load" "spike" "soak" "stress")
@@ -127,24 +127,31 @@ adaptive_cooldown() {
   echo "[$(timestamp)] Adaptive cooldown after ${after_test}: waiting for response time to recover to <= ${threshold}s (baseline ${baseline}s, max ${ADAPTIVE_COOLDOWN_MAX_SECONDS}s)..."
 
   local waited=0
+  # window_start/window_end bracket each poll: since we only sample every
+  # ADAPTIVE_COOLDOWN_POLL_INTERVAL seconds, the actual recovery moment
+  # could have happened anywhere inside that window, not exactly at
+  # window_end — so we report the whole window as a range instead of
+  # pretending we caught the precise second.
   while [[ $waited -lt $ADAPTIVE_COOLDOWN_MAX_SECONDS ]]; do
+    local window_start=$waited
     sleep "$ADAPTIVE_COOLDOWN_POLL_INTERVAL"
     waited=$((waited + ADAPTIVE_COOLDOWN_POLL_INTERVAL))
+    local window_end=$waited
 
     local current
     current="$(measure_response_time)"
     if [[ -z "$current" ]]; then
-      echo "  ...[$(timestamp)] probe failed/timed out (waited ${waited}s), retrying..."
+      echo "  ...[$(timestamp)] probe failed/timed out (window ${window_start}-${window_end}s), retrying..."
       continue
     fi
 
     local recovered
     recovered=$(awk -v c="$current" -v t="$threshold" 'BEGIN { print (c <= t) ? "1" : "0" }')
-    echo "  ...[$(timestamp)] response time: ${current}s (waited ${waited}s, target <= ${threshold}s)"
+    echo "  ...[$(timestamp)] response time: ${current}s (window ${window_start}-${window_end}s, target <= ${threshold}s)"
 
     if [[ "$recovered" == "1" ]]; then
-      echo "[$(timestamp)] Recovered after ${waited}s."
-      echo "$(timestamp) | after=${after_test} before=${next_test} baseline=${baseline}s threshold=${threshold}s recovered_in=${waited}s final=${current}s" >> "$RECOVERY_LOG"
+      echo "[$(timestamp)] Recovered sometime within ${window_start}-${window_end}s."
+      echo "$(timestamp) | after=${after_test} before=${next_test} baseline=${baseline}s threshold=${threshold}s recovered_in=${window_start}-${window_end}s final=${current}s" >> "$RECOVERY_LOG"
       return
     fi
   done

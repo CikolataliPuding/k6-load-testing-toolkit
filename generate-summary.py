@@ -80,8 +80,10 @@ def parse_recovery_log(run_dir):
     recoveries = {}
     if not os.path.isfile(log_path):
         return recoveries
+    # recovered_in is either a "start-end" window (e.g. "24-36s") or
+    # "TIMEOUT(300s)" — both matched by the character class below.
     pattern = re.compile(
-        r"after=(?P<after>\w+)\s+before=(?P<before>\w+).*?recovered_in=(?P<recovered>[\w.()]+)"
+        r"after=(?P<after>\w+)\s+before=(?P<before>\w+).*?recovered_in=(?P<recovered>[\w.()-]+)"
     )
     with open(log_path, "r", encoding="utf-8") as f:
         for line in f:
