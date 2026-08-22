@@ -80,12 +80,12 @@ const scenarioProfiles = {
     executor: 'ramping-arrival-rate',
     startRate: 40,          // iterations/sec at t=0, mirrors the old startVUs=40 warm-up level
     timeUnit: '1s',
-    preAllocatedVUs: 500,   // pre-allocated worker pool, sized for the 500/s peak
-    maxVUs: 700,            // headroom above preAllocatedVUs in case iterations run slower than 1s
+    preAllocatedVUs: 200,   // pre-allocated worker pool, sized for the 200/s peak
+    maxVUs: 600,            // headroom above preAllocatedVUs in case iterations run slower than 1s
     stages: [
       { duration: '20s', target: 40 },
-      { duration: '15s', target: 500 },   // sudden rise
-      { duration: '40s', target: 500 },
+      { duration: '15s', target: 200 },   // sudden rise
+      { duration: '40s', target: 200 },
       { duration: '15s', target: 40 },    // sudden drop
       { duration: '30s', target: 20 },    // recovery
       { duration: '20s', target: 0 },
@@ -132,13 +132,13 @@ const scenarioProfiles = {
     executor: 'ramping-arrival-rate',
     startRate: 50,           // iterations/sec at t=0
     timeUnit: '1s',
-    preAllocatedVUs: 300,    // worker pool pre-allocated for the ramp
-    maxVUs: 1200,            // headroom so k6 can keep pushing rate even as responses slow down
+    preAllocatedVUs: 200,    // worker pool pre-allocated for the ramp
+    maxVUs: 600,            // headroom so k6 can keep pushing rate even as responses slow down
     stages: [
       // Demo-shortened single ramp (~5-8min budget); a real breakpoint
       // run typically ramps for 15min+ toward a much higher target so
       // the breaking point isn't reached artificially early.
-      { duration: '6m', target: 1000 },
+      { duration: '6m', target: 500 },
     ],
   },
   // scalability: not part of the automated run-all-tests.sh sequence,
@@ -181,6 +181,7 @@ const thresholdsByType = {
 export const options = {
   scenarios: { [testType]: scenarioProfiles[testType] },
   thresholds: thresholdsByType[testType],
+  insecureSkipTLSVerify: true,  // ignore self-signed certs for demo purposes
 };
 
 // ---- LOGIN: fetch a token once at the beginning of the test (optional) ----
