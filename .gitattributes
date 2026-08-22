@@ -1,0 +1,6 @@
+# Force LF line endings for files that get executed on Linux (Kali), even
+# though this repo is developed on Windows — CRLF in a shebang script
+# causes "bad interpreter" / "$'\r': command not found" errors on Linux.
+*.sh text eol=lf
+*.py text eol=lf
+*.js text eol=lf

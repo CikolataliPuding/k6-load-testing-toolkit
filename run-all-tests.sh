@@ -9,8 +9,24 @@
 # rather than one already weakened by the stress test.
 #
 # Usage:
-#   ./run-all-tests.sh <TARGET_APP>
+#   ./run-all-tests.sh <TARGET_APP> [options]
 #   ./run-all-tests.sh kurum-do-login
+#   ./run-all-tests.sh kurum-do-login --tests=load,spike
+#   ./run-all-tests.sh kurum-do-login --no-adaptive-cooldown --no-summary
+#   ./run-all-tests.sh kurum-do-login --menu
+#
+# Options:
+#   --tests=load,spike,soak,stress   Which tests to run (any subset, any
+#                                     order in the flag — always executed in
+#                                     the canonical load->spike->soak->stress
+#                                     order). Default: all four.
+#   --no-adaptive-cooldown           Always use the fixed cooldown below,
+#                                     skip curl-based health-check probing.
+#   --no-summary                     Skip generating the combined
+#                                     <TARGET_APP>_summary.html at the end.
+#   --menu                           Prompt interactively for the above
+#                                     instead of passing flags.
+#   -h, --help                       Show usage and exit.
 #
 # See docs/test-durations.md / README.md for context on why the test
 # durations here are shortened compared to production recommendations.
@@ -19,6 +35,14 @@ set -uo pipefail
 # NOTE: intentionally NOT using `set -e`. If one test fails (e.g. threshold
 # breach, non-zero k6 exit code), the script logs the failure and CONTINUES
 # to the next test in the sequence rather than aborting the whole run.
+
+# Make every relative path used below (targets.json, master-test.js,
+# generate-summary.py) resolve correctly no matter which directory this
+# script is invoked FROM — previously they were relative to the caller's
+# CWD, so running it via an absolute path from elsewhere would silently
+# fail to find targets.json / master-test.js.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
 # ---- Configuration ----
 K6_BIN="k6"                 # Path to the k6 binary. Edit if k6 is not on PATH,
@@ -38,14 +62,186 @@ ADAPTIVE_COOLDOWN_MAX_SECONDS=300       # 5 min safety cap so we never hang fore
 ADAPTIVE_COOLDOWN_POLL_INTERVAL=12      # re-probe every 12s while waiting.
 ADAPTIVE_COOLDOWN_RECOVERY_MARGIN=1.2   # "recovered" = response time <= baseline * 1.2 (i.e. within 20%).
 
-TEST_ORDER=("load" "spike" "soak" "stress")
+ALL_TESTS=("load" "spike" "soak" "stress")
+TEST_ORDER=("${ALL_TESTS[@]}")
 
-TARGET_APP="${1:-}"
+print_usage() {
+  cat <<USAGE
+Usage: $0 <TARGET_APP> [options]
+
+Options:
+  --tests=load,spike,soak,stress   Which tests to run (comma-separated
+                                    subset; always executed in the
+                                    canonical load->spike->soak->stress
+                                    order regardless of flag order).
+                                    Default: all four.
+  --no-adaptive-cooldown           Always use the fixed ${COOLDOWN_SECONDS}s
+                                    cooldown; skip curl-based health-check
+                                    probing (point 3).
+  --no-summary                     Skip generating the combined
+                                    <TARGET_APP>_summary.html at the end.
+  --menu                           Prompt interactively for the above
+                                    instead of passing flags.
+  -h, --help                       Show this help and exit.
+
+Examples:
+  $0 kurum-do-login
+  $0 kurum-do-login --tests=load,spike
+  $0 kurum-do-login --no-adaptive-cooldown --no-summary
+  $0 kurum-do-login --menu
+USAGE
+}
+
+# ---- CLI options (toggle-able switches) ----
+TARGET_APP=""
+SELECTED_TESTS=""
+DISABLE_ADAPTIVE_COOLDOWN=0
+DISABLE_SUMMARY=0
+INTERACTIVE_MENU=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --tests=*)
+      SELECTED_TESTS="${arg#*=}"
+      ;;
+    --no-adaptive-cooldown)
+      DISABLE_ADAPTIVE_COOLDOWN=1
+      ;;
+    --no-summary)
+      DISABLE_SUMMARY=1
+      ;;
+    --menu)
+      INTERACTIVE_MENU=1
+      ;;
+    -h|--help)
+      print_usage
+      exit 0
+      ;;
+    --*)
+      echo "ERROR: unknown option '${arg}'" >&2
+      print_usage >&2
+      exit 1
+      ;;
+    *)
+      if [[ -z "$TARGET_APP" ]]; then
+        TARGET_APP="$arg"
+      else
+        echo "ERROR: unexpected extra argument '${arg}'" >&2
+        print_usage >&2
+        exit 1
+      fi
+      ;;
+  esac
+done
 
 if [[ -z "$TARGET_APP" ]]; then
-  echo "Usage: $0 <TARGET_APP>"
-  echo "Example: $0 kurum-do-login"
+  print_usage
   exit 1
+fi
+
+# ---- Interactive menu (--menu): prompts instead of requiring flags ----
+if [[ $INTERACTIVE_MENU -eq 1 ]]; then
+  echo "=== Interactive options menu (leave blank to accept the default) ==="
+  read -r -p "Tests to run [load,spike,soak,stress]: " menu_tests
+  if [[ -n "$menu_tests" ]]; then
+    SELECTED_TESTS="$menu_tests"
+  fi
+  read -r -p "Enable adaptive cooldown? [Y/n]: " menu_adaptive
+  if [[ "$menu_adaptive" =~ ^[Nn] ]]; then
+    DISABLE_ADAPTIVE_COOLDOWN=1
+  fi
+  read -r -p "Generate combined summary report at the end? [Y/n]: " menu_summary
+  if [[ "$menu_summary" =~ ^[Nn] ]]; then
+    DISABLE_SUMMARY=1
+  fi
+  echo "==========================================================="
+fi
+
+# ---- Apply --tests= / menu selection, preserving canonical order ----
+if [[ -n "$SELECTED_TESTS" ]]; then
+  IFS=',' read -ra REQUESTED_TESTS <<< "$SELECTED_TESTS"
+  for r in "${REQUESTED_TESTS[@]}"; do
+    known=0
+    for t in "${ALL_TESTS[@]}"; do
+      [[ "$t" == "$r" ]] && known=1
+    done
+    if [[ $known -eq 0 ]]; then
+      echo "WARNING: --tests contains unknown test name '${r}', ignoring it." >&2
+    fi
+  done
+
+  FILTERED_TESTS=()
+  for t in "${ALL_TESTS[@]}"; do
+    for r in "${REQUESTED_TESTS[@]}"; do
+      if [[ "$t" == "$r" ]]; then
+        FILTERED_TESTS+=("$t")
+        break
+      fi
+    done
+  done
+
+  if [[ ${#FILTERED_TESTS[@]} -eq 0 ]]; then
+    echo "ERROR: --tests='${SELECTED_TESTS}' matched none of: ${ALL_TESTS[*]}" >&2
+    exit 1
+  fi
+  TEST_ORDER=("${FILTERED_TESTS[@]}")
+fi
+
+# ---- Pre-flight checks ----
+# Fail fast on structural problems instead of discovering them after
+# burning through some/all of 4 tests' worth of cooldowns (the previous
+# behavior: a missing k6 binary or a typo'd TARGET_APP would make every
+# single test "fail" the same way, each still followed by a full cooldown).
+if ! command -v "$K6_BIN" >/dev/null 2>&1; then
+  echo "ERROR: k6 binary '${K6_BIN}' not found on PATH. Edit K6_BIN at the top of this script, or install k6." >&2
+  exit 1
+fi
+
+if [[ ! -f "targets.json" ]]; then
+  echo "ERROR: targets.json not found in ${SCRIPT_DIR}. Copy example.targets.json to targets.json and fill in your target(s)." >&2
+  exit 1
+fi
+
+if command -v python3 >/dev/null 2>&1; then
+  # Judge success/failure from an explicit marker printed to stdout, NOT
+  # from the exit code alone: on some systems (e.g. Windows with the
+  # Microsoft Store's "python3" PATH alias and no real Python installed)
+  # `command -v python3` finds something, but running it prints an
+  # unrelated install prompt and produces no real output. Trusting only
+  # the exit code there previously caused a false "TARGET_APP not found"
+  # even for a target that genuinely exists in targets.json. Any output
+  # that isn't one of our expected markers is treated as "can't tell",
+  # not as "not found" — so it degrades to a skipped check with a
+  # warning instead of a wrong hard failure.
+  PREFLIGHT_OUTPUT="$(python3 -c '
+import json, sys
+try:
+    with open("targets.json", "r", encoding="utf-8") as f:
+        targets = json.load(f)
+except (OSError, json.JSONDecodeError) as e:
+    print(f"INVALID:{e}")
+    sys.exit(0)
+found = any(t.get("id") == sys.argv[1] for t in targets)
+print("FOUND" if found else "NOTFOUND")
+' "$TARGET_APP" 2>/dev/null)"
+
+  case "$PREFLIGHT_OUTPUT" in
+    FOUND)
+      ;;
+    NOTFOUND)
+      echo "ERROR: TARGET_APP '${TARGET_APP}' not found in targets.json (check the 'id' field matches exactly)." >&2
+      exit 1
+      ;;
+    INVALID:*)
+      echo "ERROR: targets.json is not valid JSON (${PREFLIGHT_OUTPUT#INVALID:})." >&2
+      exit 1
+      ;;
+    *)
+      echo "WARNING: python3 on PATH didn't behave as expected (no usable output) — skipping the targets.json pre-flight check; a bad TARGET_APP will only be caught once k6 tries to run."
+      ;;
+  esac
+else
+  echo "WARNING: python3 not found — skipping the targets.json pre-flight check; a bad TARGET_APP will only be caught once k6 tries to run."
 fi
 
 FAILED_TESTS=()
@@ -101,6 +297,25 @@ sys.stdout.write(target["url"])
 # PROBE_URL, or nothing on failure/timeout.
 measure_response_time() {
   curl -o /dev/null -s -w "%{time_total}" --max-time 10 "$PROBE_URL" 2>/dev/null
+}
+
+# Averages 2 samples (1s apart) instead of trusting a single curl call.
+# A lone sample can be thrown off by a cold TCP/TLS handshake or a random
+# network blip, which would then badly skew the whole recovery threshold
+# for the rest of that cooldown. Falls back to whichever single sample
+# succeeded if the other one fails.
+measure_baseline() {
+  local s1 s2
+  s1="$(measure_response_time)"
+  sleep 1
+  s2="$(measure_response_time)"
+  if [[ -n "$s1" && -n "$s2" ]]; then
+    awk -v a="$s1" -v b="$s2" 'BEGIN { printf "%.3f", (a + b) / 2 }'
+  elif [[ -n "$s1" ]]; then
+    echo "$s1"
+  else
+    echo "$s2"
+  fi
 }
 
 # Adaptive cooldown: probes PROBE_URL every ADAPTIVE_COOLDOWN_POLL_INTERVAL
@@ -181,15 +396,33 @@ mkdir -p "$RUN_DIR"
 echo "Output folder: ${RUN_DIR}/"
 
 # ---- Resolve the adaptive-cooldown probe URL (point 3) ----
+# KNOWN LIMITATION: this always sends a plain GET to the target's "url",
+# while the actual load test (for POST-login targets like kurum-do-login)
+# hammers that same URL with POST. If GET serves a cheap static form page
+# while POST does the real DB/auth work, "recovered" here may just mean
+# "the lightweight path is fast again", not "the heavy path is". We
+# deliberately do NOT probe with a real POST-login here: repeating the
+# actual login payload every ADAPTIVE_COOLDOWN_POLL_INTERVAL seconds
+# during cooldown would itself generate load on the exact path we're
+# trying to let recover, and many login endpoints lock the account out
+# after N attempts in a time window — turning a health-check into a
+# self-inflicted denial of service. If you need a truer signal, point
+# PROBE_URL (below) at a cheap, read-only endpoint that still exercises
+# the same backend (e.g. a DB-backed status/health page), not the login
+# handler itself.
 RECOVERY_LOG="${RUN_DIR}/recovery_times.log"
 PROBE_URL=""
-if command -v curl >/dev/null 2>&1; then
-  PROBE_URL="$(get_target_url "$TARGET_APP")" || PROBE_URL=""
-fi
-if [[ -n "$PROBE_URL" ]]; then
-  echo "Adaptive cooldown probe URL: ${PROBE_URL}"
+if [[ $DISABLE_ADAPTIVE_COOLDOWN -eq 1 ]]; then
+  echo "Adaptive cooldown: disabled via --no-adaptive-cooldown — using fixed ${COOLDOWN_SECONDS}s cooldown."
 else
-  echo "Adaptive cooldown probe URL: unavailable (curl missing or no 'url' for '${TARGET_APP}' in targets.json) — will use fixed ${COOLDOWN_SECONDS}s cooldown."
+  if command -v curl >/dev/null 2>&1; then
+    PROBE_URL="$(get_target_url "$TARGET_APP")" || PROBE_URL=""
+  fi
+  if [[ -n "$PROBE_URL" ]]; then
+    echo "Adaptive cooldown probe URL: ${PROBE_URL}"
+  else
+    echo "Adaptive cooldown probe URL: unavailable (curl missing or no 'url' for '${TARGET_APP}' in targets.json) — will use fixed ${COOLDOWN_SECONDS}s cooldown."
+  fi
 fi
 echo "Recovery time log: ${RECOVERY_LOG}"
 echo "==========================================================="
@@ -217,14 +450,23 @@ for i in "${!TEST_ORDER[@]}"; do
   echo "-----------------------------------------------------------"
 
   # Pre-test baseline probe (point 3): measured right before this test
-  # starts, so the post-test recovery check compares against a fresh,
-  # "just before we hit it" response time rather than a stale one.
+  # starts (2-sample average, see measure_baseline), so the post-test
+  # recovery check compares against a fresh, "just before we hit it"
+  # response time rather than a stale or single-fluke-sample one.
   PRE_TEST_BASELINE=""
   if [[ -n "$PROBE_URL" ]]; then
-    PRE_TEST_BASELINE="$(measure_response_time)"
+    PRE_TEST_BASELINE="$(measure_baseline)"
     echo "[$(timestamp)] Pre-test baseline response time: ${PRE_TEST_BASELINE:-N/A}s"
   fi
 
+  # BUG FIX: `{ ... }` is a shell GROUP, not a subshell, so STATUS set
+  # inside it persists after the closing brace. A second `STATUS=$?`
+  # right after `} > "$LOG_FILE" 2>&1` would instead capture the exit
+  # code of the LAST command run inside the group — the trailing
+  # `echo`, which always returns 0 — silently making every test look
+  # like it succeeded regardless of k6's real exit code. Only the
+  # capture INSIDE the group (right after the k6 invocation) is correct;
+  # do not add another `STATUS=$?` after the group.
   {
     echo "=== ${TEST_TYPE} test started at $(timestamp) ==="
     "$K6_BIN" run \
@@ -235,7 +477,6 @@ for i in "${!TEST_ORDER[@]}"; do
     STATUS=$?
     echo "=== ${TEST_TYPE} test finished at $(timestamp) with exit code ${STATUS} ==="
   } > "$LOG_FILE" 2>&1
-  STATUS=$?
 
   if [[ $STATUS -ne 0 ]]; then
     echo "[$(timestamp)] FAILED: ${TEST_TYPE} exited with code ${STATUS}. See ${LOG_FILE}. Continuing with next test."
@@ -289,20 +530,34 @@ fi
 # HTML reports or terminal logs. If python3 or the script is missing,
 # this step is skipped with a warning — points 1-3 are unaffected either way.
 echo ""
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SUMMARY_SCRIPT="${SCRIPT_DIR}/generate-summary.py"
-if command -v python3 >/dev/null 2>&1 && [[ -f "$SUMMARY_SCRIPT" ]]; then
-  echo "[$(timestamp)] Generating combined summary report..."
-  SUMMARY_FILE="$(python3 "$SUMMARY_SCRIPT" "$TARGET_APP" "$RUN_DIR")"
-  if [[ -n "$SUMMARY_FILE" ]]; then
-    echo "Combined summary report: ${SUMMARY_FILE}"
-  else
-    echo "WARNING: generate-summary.py ran but produced no output file."
-  fi
+if [[ $DISABLE_SUMMARY -eq 1 ]]; then
+  echo "Combined summary report: skipped (--no-summary). The per-test *_summary.json files are still there if you want to run generate-summary.py manually later."
 else
-  echo "WARNING: python3 or generate-summary.py not found — skipping combined summary report."
+  # SCRIPT_DIR was already resolved once at the top (and we already `cd`'d
+  # into it), so this just reuses it instead of recomputing.
+  SUMMARY_SCRIPT="${SCRIPT_DIR}/generate-summary.py"
+  if command -v python3 >/dev/null 2>&1 && [[ -f "$SUMMARY_SCRIPT" ]]; then
+    echo "[$(timestamp)] Generating combined summary report..."
+    SUMMARY_FILE="$(python3 "$SUMMARY_SCRIPT" "$TARGET_APP" "$RUN_DIR")"
+    if [[ -n "$SUMMARY_FILE" ]]; then
+      echo "Combined summary report: ${SUMMARY_FILE}"
+    else
+      echo "WARNING: generate-summary.py ran but produced no output file."
+    fi
+  else
+    echo "WARNING: python3 or generate-summary.py not found — skipping combined summary report."
+  fi
 fi
 
 echo "==========================================================="
 echo "  Run complete — Egemen Korkmaz, k6-load-testing-toolkit"
 echo "==========================================================="
+
+# Non-zero exit if any test failed, so CI/cron/automation calling this
+# script can actually detect a failed run instead of always seeing 0
+# (this only works now that the STATUS-capture bug above is fixed —
+# before, FAILED_TESTS was always empty regardless of what happened).
+if [[ ${#FAILED_TESTS[@]} -gt 0 ]]; then
+  exit 1
+fi
+exit 0

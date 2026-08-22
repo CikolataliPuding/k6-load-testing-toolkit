@@ -219,11 +219,31 @@ export default function (data) {
     res = http.post(targetApp.url, targetApp.payload, { headers });
   }
 
-  check(res, {
+  const checks = {
     [`${targetApp.name} - successful (2xx)`]: (r) => r.status >= 200 && r.status < 300,
-  });
+  };
+  // Optional, config-driven (targets.json): a 2xx status alone doesn't
+  // prove a login actually succeeded — plenty of PHP apps re-render the
+  // same login page with HTTP 200 and an inline error on bad credentials.
+  // If a target defines "failureIndicator" (a string that only appears
+  // in the body on a failed login, e.g. "Invalid username or password"),
+  // also fail the check when that string shows up in a "successful" response.
+  if (targetApp.failureIndicator) {
+    checks[`${targetApp.name} - no failure indicator in body`] =
+      (r) => !r.body || !r.body.includes(targetApp.failureIndicator);
+  }
+  check(res, checks);
 
-  sleep(1);
+  // Closed-model executors (load/soak/scalability use ramping-vus /
+  // constant-vus) rely on this sleep as "think time" between a VU's
+  // requests. Open-model executors (spike/stress use
+  // ramping-arrival-rate) already control request pacing externally via
+  // their target rate — an extra fixed 1s per iteration there only
+  // inflates how long each iteration occupies a VU, forcing higher
+  // preAllocatedVUs/maxVUs for no realism benefit, so it's skipped there.
+  if (testType !== 'spike' && testType !== 'stress') {
+    sleep(1);
+  }
 }
 
 export function handleSummary(data) {

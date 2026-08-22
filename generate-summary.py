@@ -60,6 +60,17 @@ def metric_value(metrics, name, *value_keys):
     return None
 
 
+def threshold_passed(result):
+    """k6's --summary-export format for a threshold result varies by
+    version: sometimes a plain bool (True = passed), sometimes an object
+    like {"ok": true}. Handle both so this doesn't crash on either."""
+    if isinstance(result, bool):
+        return result
+    if isinstance(result, dict):
+        return result.get("ok", True)
+    return True
+
+
 def count_failed_thresholds(metrics):
     failed = 0
     total = 0
@@ -69,7 +80,7 @@ def count_failed_thresholds(metrics):
             continue
         for _, result in thresholds.items():
             total += 1
-            if not result.get("ok", True):
+            if not threshold_passed(result):
                 failed += 1
     return failed, total
 

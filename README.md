@@ -69,7 +69,9 @@ sudo apt-get install k6
 ]
 ```
 
-For targets that require authentication, the `loginUrl` and `credentials` fields can be added. The `setup()` function automatically uses these fields during authentication.
+For targets that require authentication, the `loginUrl` and `credentials` fields can be added. The `setup()` function automatically uses these fields during authentication. Note this path assumes a JSON API that returns a token (`{"token": "..."}` / `{"access_token": "..."}`) — for a classic PHP session/cookie login form, omit `loginUrl`/`credentials` entirely and just set `method: "POST"` with the login `payload` directly, so the login request itself is what gets load-tested.
+
+An optional `failureIndicator` field (a string) can also be added: if the response body contains it, the request's check fails even on a 2xx status. This matters because many login pages return HTTP 200 with an inline error message on bad credentials — a pure status-code check would then wrongly count a failed login as a success.
 
 ## Demo Automation: `run-all-tests.sh`
 
@@ -79,6 +81,18 @@ For targets that require authentication, the `loginUrl` and `credentials` fields
 ./run-all-tests.sh <TARGET_APP>
 ./run-all-tests.sh kurum-do-login
 ```
+
+### Toggle-able options
+
+```bash
+./run-all-tests.sh kurum-do-login --tests=load,spike        # only run a subset (canonical order is kept regardless of how you list them)
+./run-all-tests.sh kurum-do-login --no-adaptive-cooldown     # always use the fixed cooldown, skip curl health-check probing
+./run-all-tests.sh kurum-do-login --no-summary                # skip the combined summary HTML at the end
+./run-all-tests.sh kurum-do-login --menu                      # prompt interactively for the above instead of flags
+./run-all-tests.sh --help                                     # full usage
+```
+
+These can be combined (e.g. `--tests=load,spike --no-summary`). `--menu` asks the same 3 questions (which tests, adaptive cooldown on/off, summary on/off) interactively — handy if you don't want to remember flag syntax.
 
 * **Order — Load → Spike → Soak → Stress:** least destructive first, most destructive last. Soak deliberately runs before Stress so the leak/degradation check happens against a clean, unbroken system rather than one already weakened by the stress test. (`scalability` is not part of this automation and is still run manually.)
 * A fixed **4-minute (240s) cooldown** is inserted between each test, with a countdown printed to the terminal every 30s so it's clear the script is still running.
@@ -115,6 +129,10 @@ A FIXED 4-minute cooldown is used between tests. Note: a more advanced approach 
 The `lib/scenario.js` file and individual files such as `load_test.js` and `stress_test.js` provide an alternative implementation based on a “one file per test type” approach.
 
 The login and API scenario is defined in a single location inside `lib/scenario.js`, while each test file specifies only its own load profile through the `options` configuration.
+
+## Troubleshooting
+
+Seeing an error or exit code you don't recognize (from `run-all-tests.sh`, k6, or `generate-summary.py`)? See [`docs/troubleshooting.md`](docs/troubleshooting.md) for a reference of what each one means and how to fix it — including k6's own exit codes (e.g. `99` = a threshold failed) and a note on why static assets (CSS/JS/images) aren't part of the measured load.
 
 ## Ethical Use Disclaimer
 
