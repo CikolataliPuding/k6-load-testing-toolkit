@@ -124,12 +124,6 @@ Industry-standard recommendations for a real/production environment:
 
 A FIXED 4-minute cooldown is used between tests. Note: a more advanced approach would be an adaptive health-check mechanism that measures whether the system has actually returned to baseline instead of using a fixed delay (logging the recovery time itself as a metric) — this repo currently uses a simple/fixed duration, noted here as an area for future improvement.
 
-## Alternative Structure: `lib/` Directory
-
-The `lib/scenario.js` file and individual files such as `load_test.js` and `stress_test.js` provide an alternative implementation based on a “one file per test type” approach.
-
-The login and API scenario is defined in a single location inside `lib/scenario.js`, while each test file specifies only its own load profile through the `options` configuration.
-
 ## Troubleshooting
 
 Seeing an error or exit code you don't recognize (from `run-all-tests.sh`, k6, or `generate-summary.py`)? See [`docs/troubleshooting.md`](docs/troubleshooting.md) for a reference of what each one means and how to fix it — including k6's own exit codes (e.g. `99` = a threshold failed) and a note on why static assets (CSS/JS/images) aren't part of the measured load.
